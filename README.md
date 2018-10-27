@@ -11,6 +11,6 @@ On the other hand, they are
 * Free (under GPL V3)
 * Tested to catch critical events over quite some years.
 
-If you need help in adding features send a mail to zensonic@zensonic.dk and we can figure out what that will cost you.
+If you need help in adding features send a mail to github@zensonic.dk and we can figure out what that will cost you.
 
 Thomas

@@ -1,0 +1,96 @@
+!PATROLV3.5.90i CF21FB34C2A2CF1F04390F9349351ABB4C19391BFA52D7CF
+!#MSG_DOMAIN	km_sec
+!++
+!
+! PATROL Session Knowledge Module
+!
+!--
+
+
+VERSION 1.7
+
+APPLICATIONS = { 
+  { NAME = "POWERHA",
+	ACTIVE = True,
+	SECURITY = False,
+	PROPAGATE_STATE = True,
+	CREATE_ICON = False,
+	SUSPEND_GLOBAL_PARAMS = False,
+	DISCOVERY_TIME = 0,
+	DISCOVERY = PSL,
+	PRE_DISCOVERY_TEXT =  1454056954 "# This code is copyright. Should you have interesst in it, you can buy\
+# support or the actual source code by contacting the author at\
+# the address below.\
+#\
+# Copyright 2018 Thomas S. Iversen (zensonic@zensonic.dk)\
+\
+while(1) {\
+	go=trim(nthlinef(pconfig(\"GET\",\"/POWERHA.activate\"),\"2\"),\"\\n\");\
+	if(go) {\
+		if(2 > get(\"active\")) {\
+               		set(\"active\", 2);\
+			exit;\
+		}\
+	}\
+	sleep(300);\
+}",
+	DISCOVERY_TEXT =  1454056954 "# This code is copyright. Should you have interesst in it, you can buy\
+# support or the actual source code by contacting the author at\
+# the address below.\
+#\
+# Copyright 2018 Thomas S. Iversen (zensonic@zensonic.dk)\
+\
+requires powerha;\
+powerha_discover(\"POWERHA\",\"\");",
+	COMMANDS = {
+		{ NAME = "Toggle Debug", AVAILABILITY = AVAILABLE_ALWAYS, SECURITY = SECURITY_INHERIT,
+				BASE_COMMAND = { 
+				{ COMPUTER_TYPE = "ALL_COMPUTERS", COMMAND_TYPE = "PSL",
+				  COMMAND_TEXT =  1453847272 "requires powerha;\
+toggle_debug_level(\"/POWERHA/debug_level\");"}
+				}
+		}
+
+	},
+	PARAMETERS = {
+		{	NAME = "State", PARAM_TYPE = CONSUMER, ACTIVE = True, MONITOR = True, CHECK = False,
+				BASE_COMMAND = { 
+				{ COMPUTER_TYPE = "ALL_COMPUTERS", COMMAND_TYPE = "OS",
+				  COMMAND_TEXT =  1539771512 "exit;"}
+				},
+			TITLE = "State Of Cluster", UNITS = "(0 = OK, 1 = Warn, 2 = Error)",
+			HISTORY_TIME = "600", HISTORY_SPAN = 0, HISTORY_LEVEL = False,
+			FORMAT = "%f", OUTPUT = OUTPUT_STOPLIGHT,
+			AUTO_RESCALE = True, Y_AXIS_MIN = 0, Y_AXIS_MAX = 2,
+			RANGES = {
+			  { NAME = "BORDER", ACTIVE = True, MINIMUM = 0, MAXIMUM = 2, STATE = OK, ALARM_WHEN = ALARM_INSTANT, ALARM_WHEN_N = 0
+			  },
+			  { NAME = "ALARM1", ACTIVE = True, MINIMUM = 1, MAXIMUM = 1, STATE = WARN, ALARM_WHEN = ALARM_INSTANT, ALARM_WHEN_N = 0
+			  },
+			  { NAME = "ALARM2", ACTIVE = True, MINIMUM = 2, MAXIMUM = 2, STATE = ALARM, ALARM_WHEN = ALARM_INSTANT, ALARM_WHEN_N = 0
+			  }
+			}
+		},
+		{	NAME = "PatrolModuleVersion", PARAM_TYPE = CONSUMER, ACTIVE = True, MONITOR = True, CHECK = False,
+				BASE_COMMAND = { 
+				{ COMPUTER_TYPE = "ALL_COMPUTERS", COMMAND_TYPE = "OS",
+				  COMMAND_TEXT =  1453840349 "exit;"}
+				},
+			TITLE = "Patrol Module Version",
+			HISTORY_TIME = "600", HISTORY_SPAN = 0, HISTORY_LEVEL = False,
+			FORMAT = "%s", OUTPUT = OUTPUT_TEXT,
+			AUTO_RESCALE = True, Y_AXIS_MIN = 0, Y_AXIS_MAX = 100,
+			RANGES = {
+			  { NAME = "BORDER", ACTIVE = False, MINIMUM = 0, MAXIMUM = 100, STATE = OK, ALARM_WHEN = ALARM_INSTANT, ALARM_WHEN_N = 0
+			  },
+			  { NAME = "ALARM1", ACTIVE = False, MINIMUM = 0, MAXIMUM = 100, STATE = OK, ALARM_WHEN = ALARM_INSTANT, ALARM_WHEN_N = 0
+			  },
+			  { NAME = "ALARM2", ACTIVE = False, MINIMUM = 100, MAXIMUM = 100, STATE = OK, ALARM_WHEN = ALARM_INSTANT, ALARM_WHEN_N = 0
+			  }
+			}
+		}
+
+	}
+  }
+}
+!33072

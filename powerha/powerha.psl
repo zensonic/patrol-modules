@@ -1,0 +1,508 @@
+# PSL Serial No.: 1017338672
+#
+
+vstring="
+# Patrol module for PowerHA (AIX) monitoring and event generation
+#   
+# Developed by Thomas S. Iversen (zensonic@zensonic.dk)
+# Copyright (C) 2018 Thomas S. Iversen (zensonic@zensonic.dk)
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# 
+# Versions
+#
+#       20181011 Initial version
+#       20181025 Bugfix for sudo and failover.
+#       20181025 More debug statements
+# 	20181027 License added
+";
+
+
+export function powerha_discover;
+export function toggle_debug_level;
+
+# top level class
+a="";
+
+function toggle_debug_level(var) {
+        local debug_level;
+        debug_level=trim(nthlinef(pconfig("GET",var),"2"),"\n");
+        debug_level=(debug_level=="")?0:debug_level;
+        debug_level=(debug_level==0)?1:0;
+        pconfig("REPLACE",var,debug_level);
+}
+
+function debug(debug_level,str) {
+	if(isnumber(debug_level) && debug_level > 0) {
+		print(time() . " - " . debug_level . " - " . str . "\n");
+	}
+}
+
+function set_cluster_status(mainclass,status,text) {
+	a="/" . mainclass . "/" . mainclass;
+	set(a . "/State/value",status);
+	if(text!="") {
+		annotate(a . "/State", "%Text", text);
+	}
+}
+
+
+function treat_cluster(debug_level,cltopinfo,mainclass,parentclass) {
+    debug(debug_level,"In treat_cluster");
+
+    cluster_name="PowerHA cluster";
+    foreach linei (cltopinfo) {
+	if(grep("Cluster Name:",linei)) {
+ 		cluster_name=trim(ntharg(ntharg(linei,2,":"),1)," ");
+    		debug(debug_level,"Parsed cluster name to: " . cluster_name . " from line: " . linei);
+        }
+    }
+
+    debug(debug_level,"Setting cluster name to: " . cluster_name);
+
+    a="/" . mainclass . "/" . mainclass;
+	
+    if(!exists(a)) {
+        debug(debug_level,"Creating class " . a . " with parentclass: " . parentclass);
+	create(a,cluster_name,"OK","",parentclass);
+    }
+
+    set(a . "/PatrolModuleVersion/value",vstring);
+}
+
+function treat_nodes(debug_level,cltopinfo,a) {
+	debug(debug_level,"In treat_nodes");
+
+	foreach linei (cltopinfo) {
+		if(grep("^NODE",linei)) {
+			node_name=trim(nthargf(nthargf(linei,1,":"),2),"\n");
+			debug(debug_level,"Found nodename of " . node_name);    
+			b="/POWERHA_NODE/" . node_name;
+			if(!exists(b)) {
+				debug(debug_level,b . " does not exist. creating. Attaching to " . a);    
+				create(b,node_name,"OK","",a);
+				set(b . "/State/value",0);
+			}
+		}
+	}
+
+	debug(debug_level,"Out of treat_nodes.");
+}
+
+function set_node_status(debug_level,collected2,a) {
+	debug(debug_level,"In set_node_status");
+	debug(debug_level,"We have this input: " . collected2);
+	pnode="";
+	foreach hest (collected2) {
+		debug(debug_level,"hest: " . hest);
+		if(grep("node:",hest)) {
+			debug(debug_level,"node: " . hest);
+			pnode=trim(nthargf(trim(nthargf(hest,2,":")," ",TRIM_LEADING),1),"\" ");
+		} elsif(grep("Cluster services status:",hest)) {
+			cs_status=trim(nthargf(trim(nthargf(hest,2,":")," ",TRIM_LEADING),1),"\" ");
+		} elsif(grep("Remote communications:",hest)) {
+			rc_status=trim(nthargf(trim(nthargf(hest,2,":")," ",TRIM_LEADING),1),"\" ");
+		} elsif(grep("Cluster-Aware AIX status:",hest)) {
+			ca_status=trim(nthargf(trim(nthargf(hest,2,":")," ",TRIM_LEADING),1),"\" ");
+		}
+	}
+
+	debug(debug_level,"pnode: " . pnode);
+	
+	if(pnode!="") {
+		debug(debug_level,"cs_status: " . cs_status);
+		debug(debug_level,"rc_status: " . rc_status);
+		debug(debug_level,"ca_status: " . ca_status);
+
+		bb="/POWERHA_NODE/" . pnode;
+		if(cs_status != "NORMAL" || rc_status != "UP" || ca_status != "UP") {
+				set(bb . "/State/value",2);
+				annotate(bb . "/State", "%Text", collected2);
+		} else {
+				set(bb . "/State/value",0);
+		}
+
+	}
+	debug(debug_level,"out of set_node_status");
+
+}
+
+function treat_status_for_nodes(debug_level,clshowsrv,a) {
+	debug(debug_level,"In treat_status_for_nodes");
+	debug(debug_level,"We have this input: " . clshowsrv);
+
+	parsing=0;
+	start=1;
+	local i;
+	i=0;
+	foreach linei (clshowsrv) {
+		i++;
+
+		# This marks the start of a new section.
+		if(parsing == 0 && (grep("^Local node:",linei) || grep("^Remote node:",linei))) {
+			debug(debug_level,"Start parsing from line: " . i);	
+			start=i;
+			parsing=1;
+
+		# This marks the end of a section
+		} elsif(parsing == 1 && (grep("^[ \t\n]*$",linei) || grep("^$",linei) || linei == "")) {
+			debug(debug_level,"Stopped parsing at line: " . i);	
+			collected2=nthlinef(clshowsrv,start . "-" . (i-1));
+			parsing=0;
+			debug(debug_level,collected2);
+			set_node_status(debug_level,collected2,a);
+		}
+	}	
+
+	debug(debug_level,"Out of treat_status_for_nodes");
+}
+
+function treat_resource_group(debug_level,package_name,collected,fslist,a) {
+	debug(debug_level,"In treat_resource_group for package: " . package_name);
+	debug(debug_level,"collected: " . collected);
+
+	# We can have multiple states in this. First is for the package state itself
+	# subsequent can be for the resources
+        state="";
+	owner="";
+	contype="";
+	online_count=0;
+	offline_count=0;
+
+	# All lines in collected is about the same package (on differnet nodes)
+	# Make two passes over these data
+	# Pass 1 - collect count of nodes where package is online/offline. In this pass also update the fs add/del exclude lists
+	# Pass 2 - create patrol class of package name and set state value based on pass 1 and package type
+
+	# Pass 1
+	foreach linei (collected) {
+		debug(debug_level,"linei: " . linei);
+		debug(debug_level,"package_name: " . package_name);
+
+		state=trim(nthargf(linei,2,":"),"\n");
+		owner=trim(nthargf(linei,3,":"),"\n");
+		contype=trim(nthargf(linei,4,":"),"\n");
+
+		if(state == "ONLINE") {
+		    online_count++;
+		} else {
+			if(state == "OFFLINE") {
+			    offline_count++;
+			}
+		}
+
+		# Treat filesystems for this RG
+		foreach fs (fslist) {
+                        debug(debug_level,"fs:  " . fs);
+
+                        fs1=nthargf(trim(fs,"/",TRIM_LEADING),"1-","/","-");
+                        debug(debug_level,"fs1: " . fs1);
+
+                        if(hostname==owner) {
+				if (state == "ONLINE") {
+					# Then filesystem is online on this host
+					# => Clear the exclude list on this host for
+					#    that fs
+
+					de=de . fs1 . "\n" . fs . "\n";
+				} else {
+					# Then filesystem is online on one of
+					# the other nodes
+					#
+					# Let the other node deal with that fs, but
+					# put the filesystem into the exclude list
+					# on this host - unless the RG type is concurrent
+					ae=ae . fs1 . "\n" . fs . "\n";
+				}
+                        }
+
+
+		}
+
+		debug(debug_level,"online_count: " . online_count);
+		debug(debug_level,"offline_count: " . offline_count);
+	}
+
+	# pass 2	
+	if(online_count == 0) {
+                unowned_count++;
+		owner="unowned";
+		node_owner="/POWERHA_NODE/" . owner;
+		if(!exists(node_owner)) {
+			create(node_owner,"Unowned packages","OK","",a);
+			set(node_owner . "/State/value",0);
+		}
+
+		str=owner . "_" . package_name;
+		c="/POWERHA_RG/" . str;
+		parsed_list = (parsed_list=="")?str:parsed_list . "\n" . str;
+		if(!exists(c)) {
+			create(c,package_name,"OK","",node_owner);
+		}
+		set(c . "/State/value",2);
+		annotate(c . "/State", "%Text", collected);
+
+	} else {
+		nol=lines(collected);
+		foreach linei (collected) {
+			state=trim(nthargf(linei,2,":"),"\n");
+			owner=trim(nthargf(linei,3,":"),"\n");
+			contype=trim(nthargf(linei,4,":"),"\n");
+			if(state=="ONLINE") {
+				node_owner="/POWERHA_NODE/" . owner;
+
+				str=owner . "_" . package_name;
+				c="/POWERHA_RG/" . str;
+				parsed_list = (parsed_list=="")?str:parsed_list . "\n" . str;
+				if(!exists(c)) {
+					create(c,package_name,"OK","",node_owner);
+				}
+
+				if(contype=="non-concurrent") {
+					if(online_count==1) {
+						set(c . "/State/value",0);
+					} else {
+						set(c . "/State/value",1);
+						annotate(c . "/State", "%Text", "This is a non-concurrent group online on multiple nodes: " . collected);
+					}
+				} else {
+					if(online_count==nol) {
+						set(c . "/State/value",0);
+					} else {
+						set(c . "/State/value",1);
+						annotate(c . "/State", "%Text", "This is a concurrent group online on less than all nodes: " . collected);
+					}
+				}
+			}
+		}
+	}
+
+
+
+	debug(debug_level,"Out of treat_resource_group");
+}
+
+function filter_package_fs_list(x,y) {
+	z="";
+	foreach fsline (x) {
+		rg=ntharg(fsline,1);
+		fs=ntharg(fsline,2);
+		if(rg==y) {
+			z=union(z,fs);
+		}
+	}
+	return z;
+}
+
+function treat_resource_groups(debug_level,collected,cllsfsinfo,a) {
+    debug(debug_level,"In treat_resource_groups");
+
+    # Global count accross all RGs
+    unowned_count=0;
+
+    nol=lines(collected);
+
+    # Add to FS exclude list as RG is online on host
+    ae="";
+
+    # Delete from FS exclude list as RG is online on host
+    de="";
+
+    parsed_list="";
+    rg_name=ntharg(nthlinef(collected,1),1,":");
+    start=1;
+    local i;
+    i=0;
+    foreach linei (collected) {
+	i++;
+	new_rg_name=ntharg(linei,1,":");
+	if(rg_name!=new_rg_name) {
+		# finalize parsed data in parse_section
+		collected2=nthlinef(collected,start . "-" . (i-1));
+
+		# We need the filesystem list for this package to go along
+		fslist=filter_package_fs_list(cllsfsinfo,rg_name);
+
+		treat_resource_group(debug_level,rg_name,collected2,fslist,a);
+
+		start=i;	
+		rg_name=new_rg_name;
+	}
+    }
+
+
+    collected2=nthlinef(collected,start . "-" . i);
+    # We need the filesystem list for this package to go along
+    fslist=filter_package_fs_list(cllsfsinfo,rg_name);
+    treat_resource_group(debug_level,rg_name,collected2,fslist,a);
+
+
+    powerha_rgs=get("/POWERHA_RG/instances");
+    to_remove=difference(powerha_rgs,parsed_list);
+
+
+
+
+    debug(debug_level,"powerha_rgs: " . powerha_rgs);
+    debug(debug_level,"parsed_list" . parsed_list);
+    debug(debug_level,"to_remove" . to_remove);
+
+    foreach line instance (to_remove) {
+	debug(debug_level,"removing POWERHA_RG instance: " . instance);
+	debug(debug_level,"Generating alarm before we delete the instance");
+
+	c="/POWERHA_RG/" . instance;
+
+	# if the value is 2 then we have an alarm on this package switch. Destroy it
+	if(get(c . "/State/value") == 2) {
+		destroy(c);	
+	} else {
+		# If not, then set an alarm. In the next cycle we will delete it
+		set(c . "/State/value",2);
+	}
+
+    }
+
+	# If we have no unowned packages at the end, remove the
+	# pseudo powerha_node where we attach the unowned RGs
+	if(unowned_count==0) {
+                node_owner="/POWERHA_NODE/unowned";
+                if(exists(node_owner)) {
+                        set(node_owner . "/State/value",0);
+                        destroy(node_owner);
+                }
+
+	}
+
+	filterList = nthargf(replace(nthlinef(pconfig("GET","/AgentSetup/FILESYSTEM.filterList"),"2"), "\\\\", ""),"1-",",","\n");
+	debug(debug_level,"Filterlist : " . filterList);
+	debug(debug_level,"de: " . de);
+	debug(debug_level,"ae: " . ae);
+	
+	# What to remove. Return what is in filterList, which is not on de. Thus the items in de has been removed
+	filterList=difference(filterList,de);
+
+	# What to add to the exclude
+	filterList=union(filterList,ae);
+
+	# Back to a comma seperated thingy
+	filterList= trim(nthlinef(filterList,"1-",","),",",TRIM_TRAILING);
+	debug(debug_level,"filterList: " . filterList);
+
+	pconfig("REPLACE","/AgentSetup/FILESYSTEM.filterList",filterList);
+
+	
+    debug(debug_level,"Out of treat_resource_groups.");
+}
+
+
+
+function powerha_discover(mainclass,parentclass) {
+	debug_level=trim(nthlinef(pconfig("GET",parentclass ."/debug_level"),"2"),"\n");
+	debug_level=(debug_level=="")?0:debug_level;
+
+	cllsfs_executable=trim(nthlinef(pconfig("GET",parentclass ."/cllsfs_executable"),"2"),"\n");
+	cllsfs_executable=(cllsfs_executable=="")?"/usr/es/sbin/cluster/utilities/cllsfs":cllsfs_executable;
+
+	clrginfo_executable=trim(nthlinef(pconfig("GET",parentclass ."/clrginfo_executable"),"2"),"\n");
+	clrginfo_executable=(clrginfo_executable=="")?"/usr/es/sbin/cluster/utilities/clRGinfo -s":clrginfo_executable;
+
+	cltopinfo_executable=trim(nthlinef(pconfig("GET",parentclass ."/cltopinfo_executable"),"2"),"\n");
+	cltopinfo_executable=(cltopinfo_executable=="")?"/usr/es/sbin/cluster/utilities/cltopinfo":cltopinfo_executable;
+
+	clshowsrv_executable=trim(nthlinef(pconfig("GET",parentclass ."/clshowsrv_executable"),"2"),"\n");
+	clshowsrv_executable=(clshowsrv_executable=="")?"/usr/es/sbin/cluster/utilities/clshowsrv -v":clshowsrv_executable;
+
+	debug(debug_level,"Using " . cllsfs_executable . " as discover test. Has to exsist as a file");
+	if(file(cllsfs_executable)) {
+		errors="";
+		status=0;
+
+		hostname=nthargf(system("uname -n"),1,".");
+
+		# Get sudo command to use
+		sudo=trim(nthlinef(pconfig("GET",parentclass ."/" ."sudo"),"2"),"\n");
+		sudo=(sudo=="")?"sudo":sudo;
+
+		# get cltopinfo 
+		cmd=sudo . " " . cltopinfo_executable;
+                cltopinfo=system(cmd);
+		if(grep("sudo",cltopinfo) || cltopinfo == "") {
+			debug(debug_level,"Data: " . cltopinfo);
+			status=2;
+			error="Could not execute " . cmd . ". Got " . cltopinfo . " as output"; 
+			errors = (errors=="")?error:errors . "\n" . error;
+		} else {
+		
+			# Create cluster class
+			treat_cluster(debug_level,cltopinfo,mainclass,parentclass);
+
+			# Create node classes
+               		treat_nodes(debug_level,cltopinfo,mainclass);
+
+		}
+
+
+		# Get Filesystem info
+		cmd=sudo . " " . cllsfs_executable;
+                cllsfsinfo=system(cmd);
+		if(grep("sudo",cllsfsinfo) || cllsfsinfo == "") {
+			debug(debug_level,"Data: " . cllsfsinfo);
+			status=2;
+			error="Could not execute " . cmd . ". Got " . cllsfsinfo . " as output"; 
+			errors = (errors=="")?error:errors . "\n" . error;
+	
+			# Clear cllsfsinfo to indicate that we do not have valid data just in case
+			cllsfsinfo="";
+		}
+
+
+
+
+		# Get resource group info
+		cmd=sudo . " " . clrginfo_executable;
+                clrginfo=system(cmd);
+		if(grep("sudo",clrginfo) || clrginfo == "") {
+			debug(debug_level,"Data: " . clrginfo);
+			status=2;
+			error="Could not execute " . cmd . ". Got " . clrginfo . " as output"; 
+			errors = (errors=="")?error:errors . "\n" . error;
+
+		} else {
+			treat_resource_groups(debug_level,clrginfo,cllsfsinfo,mainclass);
+		}
+
+		# Get server info
+		cmd=sudo . " " . clshowsrv_executable;
+                clshowsrv=system(cmd);
+		if(grep("sudo",clshowsrv) || clshowsrv == "") {
+			debug(debug_level,"Data: " . clshowsrv);
+			status=2;
+			error="Could not execute " . cmd . ". Got " . clshowsrv . " as output"; 
+			errors = (errors=="")?error:errors . "\n" . error;
+
+		} else {
+			treat_status_for_nodes(debug_level,clshowsrv,mainclass);
+		}
+
+
+		# Set overall cluster status. This is used to indicate
+		# issues in executing commands and the like.
+		set_cluster_status(mainclass,status,errors);
+		
+
+	} else {
+		debug(debug_level, "Executable " . cllsfs_executable . " does not exists as a file (might be a symlink. Will not use that. You can set a ponfig variable for an override");
+	}
+}
